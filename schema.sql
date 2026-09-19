@@ -59,3 +59,29 @@ CREATE TABLE Jobs (
 );
 
 CREATE INDEX idx_jobs_status_time ON Jobs(status, submitted_at);
+
+CREATE TABLE Allocations (
+    alloc_id     SERIAL PRIMARY KEY,
+    job_id       INT NOT NULL REFERENCES Jobs(job_id) ON DELETE CASCADE,
+    machine_id   INT NOT NULL REFERENCES Machines(machine_id),
+    alloc_cpus   INT NOT NULL CHECK (alloc_cpus   >= 0),
+    alloc_ram_mb INT NOT NULL CHECK (alloc_ram_mb >= 0),
+    allocated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    released_at  TIMESTAMPTZ,
+    CONSTRAINT alloc_not_empty CHECK (alloc_cpus + alloc_ram_mb > 0)
+);
+
+CREATE TABLE Memory_Blocks (
+    block_id   SERIAL PRIMARY KEY,
+    machine_id INT  NOT NULL REFERENCES Machines(machine_id) ON DELETE CASCADE,
+    start_mb   INT  NOT NULL CHECK (start_mb >= 0),
+    size_mb    INT  NOT NULL CHECK (size_mb   > 0),
+    state      TEXT NOT NULL CHECK (state IN ('FREE', 'ALLOCATED')),
+    alloc_id   INT  UNIQUE REFERENCES Allocations(alloc_id) ON DELETE CASCADE,
+    job_id     INT  REFERENCES Jobs(job_id) ON DELETE SET NULL,
+    CONSTRAINT block_state_matches_alloc CHECK ((state = 'ALLOCATED') = (alloc_id IS NOT NULL)),
+    CONSTRAINT block_no_overlap UNIQUE (machine_id, start_mb) DEFERRABLE INITIALLY DEFERRED
+);
+
+CREATE INDEX idx_alloc_active  ON Allocations(machine_id) WHERE released_at IS NULL;
+CREATE INDEX idx_blocks_lookup ON Memory_Blocks(machine_id, state, size_mb);
