@@ -22,3 +22,11 @@ def create_database():
             print(f"[DB] created database {DB_NAME}")
         except psycopg.errors.DuplicateDatabase:
             print(f"[DB] database {DB_NAME} already exists")
+
+import pathlib
+
+def run_sql_file(name):
+    sql = (pathlib.Path(__file__).parent / name).read_text(encoding="utf-8")
+    with connect(autocommit=True) as conn:
+        conn.execute(sql)
+    print(f"[DB] applied {name}")
