@@ -26,3 +26,6 @@ INSERT INTO Memory_Resources (machine_id, total_ram_mb, allocated_ram_mb, swap_m
     (2,  65536, 0, 16384),
     (3,  32768, 0,  4096),
     (4, 131072, 0, 32768);
+
+INSERT INTO Memory_Blocks (machine_id, start_mb, size_mb, state)
+SELECT machine_id, 0, total_ram_mb, 'FREE' FROM Memory_Resources;
