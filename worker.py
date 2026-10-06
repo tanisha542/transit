@@ -10,6 +10,49 @@ HEARTBEAT_SEC = 2
 _active_lock = threading.Lock()
 _active = 0
 
+_graph = None
+_graph_lock = threading.Lock()
+_release_hook = None
+_release_lock = threading.Lock()
+
+
+def set_graph(graph):
+    global _graph
+    with _graph_lock:
+        _graph = graph
+
+
+def set_release_hook(fn):
+    global _release_hook
+    with _release_lock:
+        _release_hook = fn
+
+
+def _notify_release(job_id):
+    hook = _release_hook
+    if hook is not None:
+        try:
+            hook(job_id)
+        except Exception:
+            pass
+
+
+def _graph_add_waits(conn, job_id, machine_id):
+    if _graph is None:
+        return []
+    holders = [r[0] for r in conn.execute(
+        "SELECT DISTINCT job_id FROM Allocations WHERE machine_id=%s AND released_at IS NULL",
+        (machine_id,),
+    ).fetchall()]
+    for h in holders:
+        _graph.add_wait(job_id, h)
+    return holders
+
+
+def _graph_clear(job_id):
+    if _graph is not None:
+        _graph.clear_job(job_id)
+
 
 def active_count():
     with _active_lock:
@@ -56,10 +99,13 @@ def try_allocate(conn, job, machine_id, worker_id):
             "INSERT INTO Txn_Log (job_id,machine_id,op,outcome,reason,duration_ms) VALUES (%s,%s,'ALLOCATE','COMMIT',NULL,%s)",
             (job["job_id"], machine_id, dur),
         )
+        _graph_clear(job["job_id"])
         return True
     except psycopg.errors.RaiseException as exc:
         reason = str(exc).strip().splitlines()[0]
         dur = int((time.perf_counter() - start) * 1000)
+        holders = _graph_add_waits(conn, job["job_id"], machine_id)
+        _log(conn, job["job_id"], "ERROR", f"allocation rolled back on m{machine_id}: {reason} (held by {holders})")
         conn.execute(
             "INSERT INTO Txn_Log (job_id,machine_id,op,outcome,reason,duration_ms) VALUES (%s,%s,'ALLOCATE','ROLLBACK',%s,%s)",
             (job["job_id"], machine_id, reason[:240], dur),
@@ -91,11 +137,14 @@ def _finish(conn, job, ran_for, policy, worker_id):
         "INSERT INTO Txn_Log (job_id,op,outcome,reason,duration_ms) VALUES (%s,'RELEASE','COMMIT',NULL,%s)",
         (job["job_id"], dur),
     )
+    _graph_clear(job["job_id"])
+    _notify_release(job["job_id"])
 
 
 def _requeue(conn, job, worker_id):
     conn.execute("UPDATE Jobs SET status='QUEUED' WHERE job_id=%s", (job["job_id"],))
     _log(conn, job["job_id"], "WARN", "re-queued (no feasible placement now)")
+    _notify_release(job["job_id"])
 
 
 def execute_job(job, worker_id, policy="fcfs"):
