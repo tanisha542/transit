@@ -1,8 +1,16 @@
 -- =====================================================================
--- TransactAlloc seed -- initial cluster configuration
+-- TransactAlloc seed -- four clusters of deliberately different shapes.
+--
+-- The asymmetry is the point: best-fit has something to choose between,
+-- and a job that fragments gamma (32 GB) fits comfortably on delta
+-- (128 GB), which is exactly the trade the dashboard should make visible.
 -- =====================================================================
 
-TRUNCATE Memory_Resources, CPU_Resources, Machines, Users RESTART IDENTITY CASCADE;
+TRUNCATE Execution_Logs, Defrag_Moves, Defrag_Events, Memory_Blocks,
+         Metrics_Samples, Engine_Sample, Txn_Log, System_Events,
+         Policy_Changes, Allocations, Jobs, Memory_Resources,
+         CPU_Resources, Machines, Users
+    RESTART IDENTITY CASCADE;
 
 INSERT INTO Users (username, role, quota_cpus, quota_ram_mb) VALUES
     ('admin',   'Admin', 64, 262144),
@@ -15,6 +23,10 @@ INSERT INTO Machines (hostname, ip_address, status) VALUES
     ('cluster-gamma', '192.168.1.103', 'ONLINE'),
     ('cluster-delta', '192.168.1.104', 'ONLINE');
 
+-- Clusters 1 and 2 keep the report section 5 shape (20 cores / 64 GB) so the
+-- phase 3 deadlock scenario still reproduces exactly. Clusters 3 and 4 add
+-- the asymmetry: a small one that fragments first, and a large one that
+-- best-fit will prefer to overflow onto.
 INSERT INTO CPU_Resources (machine_id, total_cores, allocated_cores, clock_speed_ghz) VALUES
     (1, 20, 0, 3.20),
     (2, 20, 0, 2.80),
@@ -27,5 +39,7 @@ INSERT INTO Memory_Resources (machine_id, total_ram_mb, allocated_ram_mb, swap_m
     (3,  32768, 0,  4096),
     (4, 131072, 0, 32768);
 
+-- Every cluster starts as one contiguous free region: no fragmentation
+-- has happened yet, so frag_index reads 0.0 across the board.
 INSERT INTO Memory_Blocks (machine_id, start_mb, size_mb, state)
 SELECT machine_id, 0, total_ram_mb, 'FREE' FROM Memory_Resources;
